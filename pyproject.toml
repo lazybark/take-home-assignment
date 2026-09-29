@@ -1,0 +1,48 @@
+[project]
+name = "payments"
+version = "0.1.0"
+description = "Payment orchestration service for a restaurant POS and a MarketPay card terminal"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "flask>=3.1",
+    "google-cloud-firestore>=2.19",
+    "gunicorn>=23.0",
+    "httpx>=0.28",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "structlog>=24.4",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "ruff>=0.8",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/payments"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# unit/ api/ concurrency/ faults/ share helpers from tests/support/ (`from support.… import`).
+pythonpath = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pyright]
+# Lets Pylance/pyright resolve imports from the local IDE venv (`make venv`).
+venvPath = "."
+venv = ".venv"
+extraPaths = ["src"]
+pythonVersion = "3.12"

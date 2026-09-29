@@ -1,0 +1,31 @@
+# Lint and test on every push, to any branch. Everything runs offline: MarketPay and
+# Firestore are simulated in the tests, so no credentials or secrets are needed here.
+name: CI
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Install (from uv.lock)
+        run: uv sync --frozen
+
+      - name: Format
+        run: uv run ruff format --check src tests scripts
+
+      - name: Lint
+        run: uv run ruff check src tests scripts
+
+      - name: Tests (including the fault suite)
+        run: uv run pytest

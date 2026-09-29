@@ -1,0 +1,30 @@
+name: payments
+
+services:
+  api:
+    build: .
+    ports:
+      - "8080:8080"
+    env_file: .env
+    environment:
+      # prod (gunicorn, no reloader) unless asked: the documented command is the graded one.
+      APP_MODE: ${APP_MODE:-prod}
+      # Real Firestore via a service account key, read by the Google client library.
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/firestore/service-account.json
+    volumes:
+      # Live code: the host checkout is mounted over the image's copy.
+      - ./:/app
+      # Credentials: mounted read-only at runtime, never copied into the image.
+      - ./secrets/certs:/run/secrets/marketpay:ro
+      - ./secrets/firestore-service-account.json:/run/secrets/firestore/service-account.json:ro
+
+  # MarketPay notifications (the bonus webhook) need a public HTTPS URL. Start with
+  # `docker compose --profile webhook up`, copy the https://…trycloudflare.com URL from
+  # this service's log into NOTIFICATION_BASE_URL in .env, then `docker compose up -d api`.
+  # A quick tunnel gets a new URL on every restart of this service.
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    profiles: ["webhook"]
+    command: tunnel --no-autoupdate --url http://api:8080
+    depends_on:
+      - api

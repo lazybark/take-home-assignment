@@ -1,0 +1,405 @@
+openapi: 3.0.3
+
+info:
+  title: POS Payment Orchestration API
+  version: 1.0.0
+  description: >
+    The HTTP API your service must implement for the take-home assignment.
+
+
+    Your service sits between a restaurant POS and a MarketPay card terminal.
+    It talks to the MarketPay Cloud API (process, last-transaction, cancel,
+    abort, terminals) — see the assignment brief for the provider semantics
+    and the invariants you are graded against.
+
+
+    Money is an integer in the currency's minor units (e.g. öre) — never a
+    float. `reference` is the client-supplied idempotency key and is the value
+    echoed by MarketPay, so it is also how you re-identify a transaction during
+    recovery. `terminalId` is passed to MarketPay as-is; the provided terminal
+    is `PAX:TEST_TERMINAL`. The provided terminal is configured to approve `SEK`
+    only.
+
+
+    TIMING CONTRACT (load-bearing): `createPayment` is SYNCHRONOUS. It blocks,
+    absorbs transient errors, and returns a definitive, provider-consistent
+    result within `deadlineSeconds` (default 60) so the waiter never re-rings the
+    order. For this to hold, the POS client's read timeout MUST be strictly
+    greater than `deadlineSeconds`. Reaching the deadline must still leave the
+    terminal in a KNOWN state and return an actionable result — how you guarantee
+    that is part of the exercise, and must never contradict what the provider
+    actually holds.
+
+servers:
+  - url: http://localhost:8080
+    description: Local test instance
+
+paths:
+  /payments:
+    post:
+      operationId: createPayment
+      summary: Take a payment (synchronous)
+      description: >
+        Run a payment on a terminal and BLOCK until the outcome is definitive or
+        `deadlineSeconds` is reached. Transient failures are absorbed within the
+        window; a definitive `declined` returns immediately. The normal response
+        is a terminal state the waiter can act on.
+
+
+        On reaching the deadline you must resolve to a clean, provider-consistent
+        state (leaving the terminal usable) rather than reporting a guess. Only a
+        genuinely unresolvable case may return `unknown`, to be settled by
+        `reconcile`; treat that as the rare exception, not the timeout path.
+
+
+        Idempotent on `reference` (set it to the order id): a repeat submission
+        for the same order returns the existing payment and must not create a
+        second charge.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePaymentRequest'
+      responses:
+        '201':
+          description: New payment, resolved to its state within the deadline.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Payment'
+        '200':
+          description: Existing payment returned for a repeated `reference`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Payment'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          description: >
+            A payment is already in progress on this terminal. Only one in-flight
+            payment per terminal is allowed — because the provider can only
+            report and reverse the *last* transaction, overlapping payments on
+            one terminal cannot be recovered unambiguously.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    get:
+      operationId: listPayments
+      summary: List payments
+      description: >
+        List and filter payments. Used for back-office views and by the test
+        suite to snapshot your service's view of the world and compare it against
+        MarketPay's own record (via `get_last_transaction`).
+      parameters:
+        - name: state
+          in: query
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/PaymentState'
+        - name: terminalId
+          in: query
+          schema:
+            type: string
+        - name: reference
+          in: query
+          schema:
+            type: string
+        - name: createdAfter
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: createdBefore
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100
+        - name: cursor
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: A page of payments.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /payments/{id}:
+    get:
+      operationId: getPayment
+      summary: Get one payment
+      description: >
+        Report the current known state of a payment. Used by the POS to settle an
+        ambiguous outcome and by the suite to observe results. You may resolve an
+        open payment on demand here or return last-known state — your choice, as
+        long as the invariants hold.
+      parameters:
+        - $ref: '#/components/parameters/PaymentId'
+      responses:
+        '200':
+          description: The payment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Payment'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /payments/{id}/cancel:
+    post:
+      operationId: cancelPayment
+      summary: Cancel / reverse a payment
+      description: >
+        POS-initiated cancellation. If the payment already committed on the
+        provider, this reverses it (via the provider's reverse-last-transaction
+        capability); if it is still in progress, it aborts it. Reversing may
+        itself fail or lose its response — the result must remain
+        provider-consistent. Payments already in a settled, non-reversible state
+        return 409.
+      parameters:
+        - $ref: '#/components/parameters/PaymentId'
+      responses:
+        '200':
+          description: The resulting payment state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Payment'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Payment is in a state that cannot be cancelled or reversed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /reconcile:
+    post:
+      operationId: reconcile
+      summary: Recover open / ambiguous payments
+      description: >
+        Safety-net recovery: find payments left `unknown` (e.g. by a crash
+        between provider commit and recording the result) and settle each against
+        the provider by matching its last transaction on `reference`. In a
+        correct synchronous design this is the rare edge path, not the main flow.
+        It must be idempotent and safe to run repeatedly, and — for a reproducible
+        suite — it must be triggerable on demand rather than firing on a wall
+        clock.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReconcileRequest'
+      responses:
+        '200':
+          description: Summary of what was examined and settled.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReconcileSummary'
+
+components:
+  parameters:
+    PaymentId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    BadRequest:
+      description: Malformed request or failed validation.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: No payment with that id.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  schemas:
+    PaymentState:
+      type: string
+      description: >
+        Lifecycle state.
+        `pending`  — in progress on the terminal; transient, observed only via
+        `getPayment`, not normally returned by the synchronous `createPayment`.
+        `approved` — committed and standing.
+        `declined` — the card was declined.
+        `failed`   — no standing charge: never committed, or committed then
+        reversed to keep the terminal clean at the deadline.
+        `cancelled`— reversed on an explicit POS cancel.
+        `unknown`  — genuinely unresolved; awaiting `reconcile`. Rare.
+      enum:
+        - pending
+        - approved
+        - declined
+        - failed
+        - cancelled
+        - unknown
+
+    CreatePaymentRequest:
+      type: object
+      required:
+        - terminalId
+        - amount
+        - currency
+        - reference
+      properties:
+        terminalId:
+          type: string
+          description: >
+            MarketPay terminal id (`MANUFACTURER:serial`, manufacturer in
+            uppercase), passed through as-is..
+          example: PAX:TEST_TERMINAL
+        amount:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Amount in the currency's minor units.
+          example: 1299
+        currency:
+          type: string
+          pattern: '^[A-Z]{3}$'
+          description: >
+            ISO 4217 alpha code. The provided terminal is configured to approve
+            `SEK` only; MarketPay expects the numeric code (`752`) and rejects a
+            currency mismatch with a 404.
+          example: SEK
+        reference:
+          type: string
+          maxLength: 36
+          description: >
+            Idempotency key; set to the order id. Max 36 characters — it is
+            sent to MarketPay as `ecrTransactionId`, which has that limit.
+          example: order-example
+        deadlineSeconds:
+          type: integer
+          minimum: 1
+          maximum: 120
+          default: 60
+          description: >
+            Max time the server may block before it must return a resolved
+            state. The POS client read timeout must exceed this.
+          example: 60
+
+    Payment:
+      type: object
+      required:
+        - id
+        - terminalId
+        - amount
+        - currency
+        - reference
+        - state
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        terminalId:
+          type: string
+        amount:
+          type: integer
+          format: int64
+        currency:
+          type: string
+          pattern: '^[A-Z]{3}$'
+        reference:
+          type: string
+        state:
+          $ref: '#/components/schemas/PaymentState'
+        providerTransactionId:
+          type: string
+          nullable: true
+          description: The provider's transaction id, once known.
+        reversed:
+          type: boolean
+          description: True if a committed charge was reversed.
+          default: false
+        declineReason:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    PaymentList:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Payment'
+        nextCursor:
+          type: string
+          nullable: true
+
+    ReconcileRequest:
+      type: object
+      properties:
+        terminalId:
+          type: string
+        olderThan:
+          type: string
+          format: date-time
+
+    ReconcileSummary:
+      type: object
+      required:
+        - scanned
+        - resolved
+        - stillOpen
+      properties:
+        scanned:
+          type: integer
+        resolved:
+          type: integer
+        stillOpen:
+          type: integer
+        resolvedIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+
+    Error:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+          example: terminal_busy
+        message:
+          type: string
+          example: A payment is already in progress on terminal PAX:TEST_TERMINAL.

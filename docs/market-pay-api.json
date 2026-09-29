@@ -1,0 +1,893 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "Cloud API",
+    "description": "Connect your POS system to Market Pay terminals over the internet. This Cloud API allows SaaS and web-based applications to securely trigger payments and handle transaction results without complex local network configurations.\n",
+    "version": "1.1.14"
+  },
+  "host": "{environment}.market-pay.com",
+  "basePath": "/",
+  "x-amf-baseUriParameters": {
+    "environment": {
+      "description": "eci-stg for staging\neci for production",
+      "enum": [
+        "eci-stg",
+        "eci"
+      ],
+      "type": "string"
+    }
+  },
+  "schemes": [
+    "https"
+  ],
+  "paths": {
+    "/last-transaction/{terminal-id}": {
+      "get": {
+        "operationId": "last-transaction",
+        "description": "Tries to find last transaction result. Useful when last transaction failed due to connection error. Payment terminal may provide previous (one before last) transaction if processTransaction failed very late, so user is obligated to check if field: ecrTransactionId matches the transaction id which failed.",
+        "consumes": [
+          "application/json"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "terminal-id",
+            "description": "Terminal id (manufacturer:serial)",
+            "required": true,
+            "in": "path",
+            "type": "string"
+          },
+          {
+            "name": "User-Agent",
+            "description": "REQUIRED. Any non-empty value is accepted. A request sent WITHOUT a User-Agent header is rejected at the gateway with an empty-body HTTP 400 (indistinguishable from a malformed request). Note that some HTTP clients — notably Node.js's native https module — do not set it automatically.",
+            "required": true,
+            "in": "header",
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "x-amf-mediaType": "application/json",
+            "schema": {
+              "$ref": "#/definitions/LastTransactionResult"
+            }
+          },
+          "500": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/process-transaction/{terminal-id}": {
+      "post": {
+        "operationId": "process-transaction",
+        "description": "Performs payment request. Transaction status notifications of the progress will be sent to the specified notification URL during the transaction.\n\nTypes of notifications are described in the types section\n\n{terminal-id} example: PAX:<TERMINAL_ID>\n\n - Terminal Provider should be in capital : PAX, not pax\n - It should be followed by Serial Number: <TERMINAL_SERIAL>",
+        "consumes": [
+          "application/json"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "waitTime",
+            "description": "Time (in seconds) to wait for the response. If transaction takes longer to process than the specified wait time, HTTP 202 ACCEPTED will be returned and the result will be delivered later with a notification only.",
+            "in": "query",
+            "default": 20,
+            "type": "integer",
+            "format": "int",
+            "minimum": 1,
+            "maximum": 300
+          },
+          {
+            "name": "terminal-id",
+            "description": "Terminal id (manufacturer:serial)",
+            "required": true,
+            "in": "path",
+            "type": "string"
+          },
+          {
+            "name": "User-Agent",
+            "description": "REQUIRED. Any non-empty value is accepted. A request sent WITHOUT a User-Agent header is rejected at the gateway with an empty-body HTTP 400 (indistinguishable from a malformed request). Note that some HTTP clients — notably Node.js's native https module — do not set it automatically.",
+            "required": true,
+            "in": "header",
+            "type": "string"
+          },
+          {
+            "x-amf-mediaType": "application/json",
+            "in": "body",
+            "name": "generated",
+            "schema": {
+              "description": "Data required to start a transaction",
+              "type": "object",
+              "required": [
+                "ecrTransactionId",
+                "amount",
+                "currency",
+                "transactionType"
+              ],
+              "properties": {
+                "merchantOption": {
+                  "description": "[Optional] Custom merchant options. Only used for specific card brands.",
+                  "type": "string"
+                },
+                "ecrTransactionId": {
+                  "description": "Unique transaction ID from ECR",
+                  "example": "ECR-mrtdoxkn-9incj9",
+                  "type": "string",
+                  "maxLength": 36
+                },
+                "cashierId": {
+                  "description": "[Optional] The ID of the cashier/operator",
+                  "example": "Cashier123",
+                  "type": "string"
+                },
+                "amount": {
+                  "description": "Transaction amount in minor units, sent as a STRING: \"1000\" = 10,00 EUR. A numeric amount is rejected. Includes the tip and cashback amounts.",
+                  "example": "1000",
+                  "type": "string"
+                },
+                "currency": {
+                  "description": "ISO 4217 numeric code (EUR = 978, DKK = 208, NOK = 578 ...). Note it is sent as a string (\"978\" = EUR)\nIf currency of POS differs from merchant's currency setup, it will result in a 404 decline",
+                  "example": "978",
+                  "type": "string"
+                },
+                "amountCashback": {
+                  "description": "[Optional] Cashback amount",
+                  "example": "0",
+                  "type": "string"
+                },
+                "transactionReference": {
+                  "description": "[Optional] Required only for pre-authorization completion, it must match original \"terminalTransactionId\" returned by the terminal in the preauthorization. A PRE_AUTHORISATION returns terminalTransactionId \"42\", so the completion sends transactionReference: \"42\"",
+                  "example": "42",
+                  "type": "string"
+                },
+                "ecrParams": {
+                  "$ref": "#/definitions/EcrParams"
+                },
+                "transactionType": {
+                  "$ref": "#/definitions/TransactionType"
+                },
+                "amountTip": {
+                  "description": "[Optional] Tip amount provided by POS",
+                  "example": "150",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Transaction completed within waitTime; the result is in the body.",
+            "x-amf-mediaType": "application/json",
+            "schema": {
+              "$ref": "#/definitions/TransactionResult"
+            }
+          },
+          "202": {
+            "description": "Accepted but not completed within waitTime. The final result will be delivered to ecrParams.notificationUrl. This is not an error — do not treat it as a failure."
+          },
+          "400": {
+            "description": "Invalid or unauthenticated request. Common causes: missing User-Agent header (empty body); amount sent as a number instead of a string; malformed body; client certificate not provisioned for this store."
+          },
+          "404": {
+            "description": "Terminal Connectivity and ConfigurationRootcause: the terminal is not currently connected to the cloud. This prevents the ECR (External Cash Register) from reaching the terminal.\n\nHow to check? Use endpoint Get/terminals to check if terminal is connected online\n\nSolutions:Master App too low version: Older versions of the Master App (e.g., 1.0.7.1) do not support Websockets, which can generally contribute to connectivity issues leading to API errors. Update versions during onboarding and trigger an update on the terminal.\n\nMaster App (launcher) failed to launch automatically on the terminal, which was the final resolution for a similar issue.\n\nCloud API integration was not configured on the specific device.\n\nThe terminal has entered in a saving mode (bubbles on the screen by default).\n\nAPI Call FormattingThe Terminal ID parameter in the request is case-sensitive. Using lowercase (e.g., pax:<terminal_id>) resulted in a 404 error, while using uppercase (PAX:<TERMINAL_ID>) was successful.\n\nCurrency used is different between terminal configuration and the API request"
+          },
+          "500": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/update-terminal/{terminal-id}": {
+      "post": {
+        "operationId": "update-terminal",
+        "description": "Requests the payment terminal to perform update. This operation can take 2-3 minutes; set your client/socket timeout to >= 5 minutes. Note: the API may return an error response before the terminal has finished, the update can still complete successfully on the device, so verify the terminal state before treating it as a failure.",
+        "consumes": [
+          "application/json"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "terminal-id",
+            "description": "Terminal id (manufacturer:serial)",
+            "required": true,
+            "in": "path",
+            "type": "string"
+          },
+          {
+            "name": "User-Agent",
+            "description": "REQUIRED. Any non-empty value is accepted. A request sent WITHOUT a User-Agent header is rejected at the gateway with an empty-body HTTP 400 (indistinguishable from a malformed request). Note that some HTTP clients — notably Node.js's native https module — do not set it automatically.",
+            "required": true,
+            "in": "header",
+            "type": "string"
+          },
+          {
+            "x-amf-mediaType": "application/json",
+            "in": "body",
+            "name": "generated",
+            "schema": {
+              "description": "Request terminal update.",
+              "type": "object",
+              "required": [
+                "duration"
+              ],
+              "properties": {
+                "duration": {
+                  "description": "REQUIRED. Timeout value (in seconds) to wait for the update. A terminal update typically takes 120-180 seconds.",
+                  "example": 120,
+                  "type": "integer",
+                  "format": "int"
+                },
+                "ecrParams": {
+                  "$ref": "#/definitions/EcrParams"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "x-amf-mediaType": "application/json",
+            "schema": {
+              "type": "object",
+              "required": [
+                "success"
+              ],
+              "properties": {
+                "success": {
+                  "description": "Set to true when terminal has been successfully updated. Set to false when any error has occurred. The errorMessage should contain this error details.",
+                  "example": true,
+                  "type": "boolean"
+                },
+                "errorMessage": {
+                  "example": "Example",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "x-amf-mediaType": "application/json",
+            "schema": {
+              "type": "object",
+              "required": [
+                "success"
+              ],
+              "properties": {
+                "success": {
+                  "description": "Set to true when terminal has been successfully updated. Set to false when any error has occurred. The errorMessage should contain this error details.",
+                  "example": true,
+                  "type": "boolean"
+                },
+                "errorMessage": {
+                  "example": "Example",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "",
+            "x-amf-mediaType": "application/json",
+            "schema": {
+              "type": "object",
+              "required": [
+                "success"
+              ],
+              "properties": {
+                "success": {
+                  "description": "Set to true when terminal has been successfully updated. Set to false when any error has occurred. The errorMessage should contain this error details.",
+                  "example": true,
+                  "type": "boolean"
+                },
+                "errorMessage": {
+                  "example": "Example",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/abort-transaction/{terminal-id}": {
+      "post": {
+        "operationId": "abort-transaction",
+        "description": "Terminates currently processing transaction. If called too late, the POI may ignore this request and return 409. If transaction is successfully performed despite abort request, then next transaction has to be performed with TransactionType=Refund parameter.",
+        "consumes": [
+          "application/json"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "terminal-id",
+            "description": "Terminal id (manufacturer:serial)",
+            "required": true,
+            "in": "path",
+            "type": "string"
+          },
+          {
+            "name": "User-Agent",
+            "description": "REQUIRED. Any non-empty value is accepted. A request sent WITHOUT a User-Agent header is rejected at the gateway with an empty-body HTTP 400 (indistinguishable from a malformed request). Note that some HTTP clients — notably Node.js's native https module — do not set it automatically.",
+            "required": true,
+            "in": "header",
+            "type": "string"
+          },
+          {
+            "x-amf-mediaType": "application/json",
+            "in": "body",
+            "name": "generated",
+            "schema": {
+              "$ref": "#/definitions/EcrParams"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Transaction aborted. No response body."
+          },
+          "404": {
+            "description": ""
+          },
+          "409": {
+            "description": "Too late to abort — the payment may have completed; issue a REFUND"
+          },
+          "500": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/terminals": {
+      "get": {
+        "operationId": "terminals",
+        "description": "Returns a list of terminals for store code. storeCode alone is sufficient; ecrId is optional.",
+        "consumes": [
+          "application/json"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "storeCode",
+            "description": "Technical Store code ID from Market Pay, should look something like: a0WKG000004wO0f2AE",
+            "required": true,
+            "in": "query",
+            "type": "string"
+          },
+          {
+            "name": "ecrId",
+            "description": "ECR ID",
+            "in": "query",
+            "type": "string"
+          },
+          {
+            "name": "connected",
+            "description": "Filter to only return currently connected or not connected terminals. If not present all terminals list will be returned.",
+            "in": "query",
+            "type": "boolean"
+          },
+          {
+            "name": "User-Agent",
+            "description": "REQUIRED. Any non-empty value is accepted. A request sent WITHOUT a User-Agent header is rejected at the gateway with an empty-body HTTP 400 (indistinguishable from a malformed request). Note that some HTTP clients — notably Node.js's native https module — do not set it automatically.",
+            "required": true,
+            "in": "header",
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of terminal sessions for the store. An empty array means no terminal is currently connected on this Store Code.\nEnsure Terminal has Cloud API configuration, expected StoreCode is used, there are no network restrictions.",
+            "x-amf-mediaType": "application/json",
+            "schema": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/TerminalSession"
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid or unauthenticated request (e.g. missing User-Agent, missing storeCode, or a certificate not provisioned for this store)"
+          },
+          "500": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/cancel-transaction/{terminal-id}": {
+      "post": {
+        "operationId": "cancel-transaction",
+        "description": "Performs transaction reversal operation. It is possible after succesfull payment operation",
+        "consumes": [
+          "application/json"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "waitTime",
+            "description": "Time (in seconds) to wait for the response. If transaction takes longer to process than the specified wait time, HTTP 202 ACCEPTED will be returned and the result will be delivered later with a notification only.",
+            "in": "query",
+            "default": 20,
+            "type": "integer",
+            "format": "int",
+            "minimum": 1,
+            "maximum": 300
+          },
+          {
+            "name": "terminal-id",
+            "description": "Terminal id (manufacturer:serial)",
+            "required": true,
+            "in": "path",
+            "type": "string"
+          },
+          {
+            "name": "User-Agent",
+            "description": "REQUIRED. Any non-empty value is accepted. A request sent WITHOUT a User-Agent header is rejected at the gateway with an empty-body HTTP 400 (indistinguishable from a malformed request). Note that some HTTP clients — notably Node.js's native https module — do not set it automatically.",
+            "required": true,
+            "in": "header",
+            "type": "string"
+          },
+          {
+            "x-amf-mediaType": "application/json",
+            "in": "body",
+            "name": "generated",
+            "schema": {
+              "description": "Parameters required to cancel payment transaction.",
+              "type": "object",
+              "required": [
+                "terminalTransactionId",
+                "ecrTransactionId",
+                "amount",
+                "currency"
+              ],
+              "properties": {
+                "terminalTransactionId": {
+                  "description": "Transaction ID provided in the response of the original payment",
+                  "example": "14",
+                  "type": "string"
+                },
+                "ecrTransactionId": {
+                  "description": "Transaction identifier provided by the ECR",
+                  "example": "ECR-mrt1levt-eqi21j",
+                  "type": "string",
+                  "maxLength": 36
+                },
+                "cashierId": {
+                  "description": "Cashier identification",
+                  "example": "POS_01",
+                  "type": "string"
+                },
+                "amount": {
+                  "description": "Amount of the original transaction (already includes tip an cashback amounts)",
+                  "example": "1000",
+                  "type": "string"
+                },
+                "currency": {
+                  "description": "ISO 4217 numeric code.",
+                  "example": "978",
+                  "type": "string"
+                },
+                "ecrParams": {
+                  "$ref": "#/definitions/EcrParams"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "x-amf-mediaType": "application/json",
+            "schema": {
+              "$ref": "#/definitions/CancellationResult"
+            }
+          },
+          "202": {
+            "description": "Accepted but not completed within waitTime. The final result will be delivered to ecrParams.notificationUrl. This is not an error — do not treat it as a failure."
+          },
+          "400": {
+            "description": "Invalid or unauthenticated request. Common causes: missing User-Agent header (empty body); amount sent as a number instead of a string; malformed body; client certificate not provisioned for this store."
+          },
+          "404": {
+            "description": ""
+          },
+          "500": {
+            "description": ""
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "LastTransactionResult": {
+      "description": "Describes a result of last transaction.",
+      "type": "object",
+      "properties": {
+        "lastTransactionState": {
+          "$ref": "#/definitions/LastTransactionState"
+        },
+        "transactionResult": {
+          "$ref": "#/definitions/TransactionResult"
+        },
+        "cancellationResult": {
+          "$ref": "#/definitions/CancellationResult"
+        }
+      }
+    },
+    "EcrParams": {
+      "type": "object",
+      "properties": {
+        "ecrId": {
+          "description": "ECR device identificator",
+          "example": "POS_01",
+          "type": "string"
+        },
+        "notificationUrl": {
+          "description": "[Optional] Public HTTPS URL that receives progress notifications and, for asynchronous (202) transactions, the final result, as one-shot POSTs of a Notification body. Not retried.",
+          "example": "https://market-pay.com/poi/notification/PAX:<TERMINAL_ID>",
+          "type": "string"
+        },
+        "printerAvailable": {
+          "description": "Specifies if printer is available on ECR",
+          "example": true,
+          "type": "boolean"
+        },
+        "operatorLanguage": {
+          "description": "ISO 639-1 Code",
+          "example": "EN",
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 2
+        }
+      }
+    },
+    "TransactionType": {
+      "description": "This type corresponds to the Nexo Retailer / PaymentType.",
+      "enum": [
+        "PURCHASE",
+        "REFUND",
+        "CASH_ADVANCE",
+        "PRE_AUTHORISATION",
+        "PRE_AUTHORISATION_COMPLETION"
+      ],
+      "example": "PURCHASE",
+      "type": "string"
+    },
+    "TransactionResult": {
+      "description": "Describes the transaction processing result.",
+      "type": "object",
+      "required": [
+        "responseCode"
+      ],
+      "properties": {
+        "terminalTransactionId": {
+          "description": "Transaction ID from the terminal",
+          "example": "14",
+          "type": "string"
+        },
+        "responseCode": {
+          "description": "Response code obtained from acquirer during the authorization. \"000\" = approved; any other value is a decline code",
+          "example": "000",
+          "type": "string"
+        },
+        "authorizationCode": {
+          "description": "Only present if Response code is \"000\".",
+          "example": "213462",
+          "type": "string"
+        },
+        "cashierReceipt": {
+          "description": "Buffer with the printout for the cashier",
+          "example": "PAYMENT\\nAMOUNT:EUR 10,00\\nAUTHORIZATION CODE: 213462\\nTRANSACTION RESULT: Approved\\nMERCHANT RECEIPT\\n",
+          "type": "string"
+        },
+        "customerReceipt": {
+          "description": "Buffer with the printout for the customer",
+          "example": "PAIEMENT\\nMONTANT:EUR 10,00\\nAUTHORIZATION CODE: 213462\\nRESULTAT: Approuve\\nRECU PORTEUR\\n",
+          "type": "string"
+        },
+        "signatureRequired": {
+          "description": "A flag that tells whether the client signature is required on the receipt.",
+          "default": false,
+          "example": true,
+          "type": "boolean"
+        },
+        "forcedOffline": {
+          "description": "Tells wether transaction has been accepted in offline mode.",
+          "default": false,
+          "example": true,
+          "type": "boolean"
+        },
+        "privateData": {
+          "description": "Buffer from private information",
+          "type": "string"
+        },
+        "issuerOption": {
+          "description": "Specific Card Option selected by issuer. ",
+          "type": "string"
+        },
+        "parBank": {
+          "description": "Payment Account Reference.",
+          "type": "string"
+        },
+        "merchantId": {
+          "description": "Merchant identificator",
+          "example": "MERCHANT_ID",
+          "type": "string"
+        },
+        "terminalId": {
+          "description": "Physical terminal identifier (device serial). DIFFERENT from the {terminal-id} connection id in the request path (e.g. \"DEVICE_SERIAL\" vs \"PAX:TEST_TERMINAL\").",
+          "example": "DEVICE_SERIAL",
+          "type": "string"
+        },
+        "cardData": {
+          "$ref": "#/definitions/CardData"
+        },
+        "status": {
+          "description": "Status of the transaction",
+          "enum": [
+            "OK",
+            "NOK",
+            "PARTIAL"
+          ],
+          "example": "OK",
+          "type": "string"
+        },
+        "dccDetails": {
+          "$ref": "#/definitions/DccDetails"
+        },
+        "finalTransactionParams": {
+          "description": "Copy of the params from the request.",
+          "type": "object",
+          "required": [
+            "ecrTransactionId",
+            "amount",
+            "currency",
+            "transactionType"
+          ],
+          "properties": {
+            "merchantOption": {
+              "description": "[Optional] Custom merchant options. Only used for specific card brands.",
+              "type": "string"
+            },
+            "ecrTransactionId": {
+              "description": "Unique transaction ID from ECR",
+              "example": "ECR-mrtdoxkn-9incj9",
+              "type": "string",
+              "maxLength": 36
+            },
+            "cashierId": {
+              "description": "[Optional] The ID of the cashier/operator",
+              "example": "Cashier123",
+              "type": "string"
+            },
+            "amount": {
+              "description": "Transaction amount in minor units, sent as a STRING: \"1000\" = 10,00 EUR. A numeric amount is rejected. Includes the tip and cashback amounts.",
+              "example": "1000",
+              "type": "string"
+            },
+            "currency": {
+              "description": "ISO 4217 numeric code (EUR = 978, DKK = 208, NOK = 578 ...). Note it is sent as a string (\"978\" = EUR)\nIf currency of POS differs from merchant's currency setup, it will result in a 404 decline",
+              "example": "978",
+              "type": "string"
+            },
+            "amountCashback": {
+              "description": "[Optional] Cashback amount",
+              "example": "0",
+              "type": "string"
+            },
+            "transactionReference": {
+              "description": "[Optional] Required only for pre-authorization completion, it must match original \"terminalTransactionId\" returned by the terminal in the preauthorization. A PRE_AUTHORISATION returns terminalTransactionId \"42\", so the completion sends transactionReference: \"42\"",
+              "example": "42",
+              "type": "string"
+            },
+            "transactionType": {
+              "$ref": "#/definitions/TransactionType"
+            },
+            "amountTip": {
+              "description": "[Optional] Tip amount provided by POS",
+              "example": "150",
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "TerminalSession": {
+      "type": "object",
+      "required": [
+        "terminalId"
+      ],
+      "properties": {
+        "terminalId": {
+          "example": "PAX:OTHER_TERMINAL",
+          "type": "string"
+        },
+        "wsCreatedTime": {
+          "example": "2025-04-16T13:53:30.747Z",
+          "type": "string",
+          "format": "date-time"
+        },
+        "connected": {
+          "example": true,
+          "type": "boolean"
+        }
+      }
+    },
+    "CancellationResult": {
+      "description": "Result of transaction cancellation.\n",
+      "type": "object",
+      "properties": {
+        "cashierReceipt": {
+          "description": "Buffer output for the cashier receipt",
+          "example": "REFUND\\nAMOUNT:EUR 10,00\\nTRANSACTION RESULT: Approved\\nMERCHANT RECEIPT\\n",
+          "type": "string"
+        },
+        "customerReceipt": {
+          "description": "Buffer output for the customer receipt",
+          "example": "REMBOURSEMENT\\nMONTANT:EUR 10,00\\nRESULTAT: Approuve\\nRECU PORTEUR\\n",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/definitions/Status"
+        },
+        "cancellationParams": {
+          "description": "Copy from the request",
+          "type": "object",
+          "required": [
+            "terminalTransactionId",
+            "ecrTransactionId",
+            "amount",
+            "currency"
+          ],
+          "properties": {
+            "terminalTransactionId": {
+              "description": "Transaction ID provided in the response of the original payment",
+              "example": "14",
+              "type": "string"
+            },
+            "ecrTransactionId": {
+              "description": "Transaction identifier provided by the ECR",
+              "example": "ECR-mrt1levt-eqi21j",
+              "type": "string",
+              "maxLength": 36
+            },
+            "cashierId": {
+              "description": "Cashier identification",
+              "example": "POS_01",
+              "type": "string"
+            },
+            "amount": {
+              "description": "Amount of the original transaction (already includes tip an cashback amounts)",
+              "example": "1000",
+              "type": "string"
+            },
+            "currency": {
+              "description": "ISO 4217 numeric code.",
+              "example": "978",
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "LastTransactionState": {
+      "description": "Describes a state of last transaction.\n",
+      "enum": [
+        "NOT_FOUND",
+        "IN_PROGRESS",
+        "FINISHED"
+      ],
+      "example": "FINISHED",
+      "type": "string"
+    },
+    "CardData": {
+      "description": "Contains card identification data obtained during card reading operation.",
+      "type": "object",
+      "properties": {
+        "cardCapture": {
+          "description": "Describes how the card has been read",
+          "enum": [
+            "CHIP",
+            "CONTACTLESS",
+            "MAGNETIC_STRIPE",
+            "TAP_PHONE",
+            "OTHER"
+          ],
+          "example": "CHIP",
+          "type": "string"
+        },
+        "extractedPan": {
+          "description": "Masked PAN as returned by the terminal, e.g. \"XXXXXXXXXXXX8555\" (masked digits followed by the last 4). The exact masking format may vary by gateway/terminal configuration.",
+          "example": "XXXXXXXXXXXX8555",
+          "type": "string"
+        },
+        "panSequenceNumber": {
+          "description": "Application Primary Account Number (PAN) Sequence Number. Identifies and differentiates cards with the same PAN.",
+          "example": "01",
+          "type": "string"
+        },
+        "bankId": {
+          "description": "The BIN - Bank Identification Number. Based on ISO/IEC 7812 / Issuer identifier number (IIN). Identifies the financial institution that issues the card. Refers to the first 4..8 digits of the Primary Account Number (PAN) on a payment card.",
+          "example": "529434",
+          "type": "string"
+        },
+        "loyaltyId": {
+          "description": "Loyalty account identification.\nSet when loyalty id is detected during card reading. Otherwise, the value is null.",
+          "example": "1030551501098651100",
+          "type": "string"
+        },
+        "loyaltyErrorFlag": {
+          "description": "Tells if obtaining loyalty id passed with success or an error occurred.\nThe value is set to:\nfalse when loyalty passed with success, no error. Field loyaltyId should be set. If field loyaltyId is NULL, it means that there is no loyalty id.\ntrue when loyalty id scanning failed.",
+          "example": true,
+          "type": "boolean"
+        },
+        "schema": {
+          "description": "Card schema provided by the gateway.",
+          "example": "MASTERCARD",
+          "type": "string"
+        },
+        "applicationId": {
+          "description": "Card application identifier (AID) in a multi-application environment. Defined by ISO/IEC 7816-5.",
+          "example": "A0000000041010C0000301",
+          "type": "string"
+        }
+      }
+    },
+    "DccDetails": {
+      "description": "Describes the dynamic currency conversion.",
+      "type": "object",
+      "properties": {
+        "dccOffered": {
+          "description": "Tells whether dynamic currency conversion has been offered during the transaction.",
+          "default": false,
+          "example": true,
+          "type": "boolean"
+        },
+        "dccUsed": {
+          "description": "If true, the dynamic currency conversion has been performed during the transaction.",
+          "example": true,
+          "type": "boolean"
+        },
+        "dccAmount": {
+          "description": "The amount in the issuer currency. Valid only when dccUsed is true.",
+          "type": "integer",
+          "format": "long"
+        },
+        "dccCurrency": {
+          "description": "Issuer currency.\nISO 4217 numeric code.",
+          "example": 578,
+          "type": "integer",
+          "format": "int"
+        }
+      }
+    },
+    "Status": {
+      "description": "Settled outcome of a transaction or payment terminal operation. Do NOT confuse with TransactionStatus, which is the in-progress notification stream.",
+      "enum": [
+        "OK",
+        "NOK",
+        "PARTIAL"
+      ],
+      "example": "OK",
+      "type": "string"
+    }
+  }
+}

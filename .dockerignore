@@ -1,0 +1,17 @@
+# Never bake credentials into the image; certs are mounted read-only at runtime.
+secrets/
+*firebase-adminsdk*.json
+*service-account*.json
+payment-integration-assignment/
+**/certs/
+*.key
+*.pem
+*.crt
+.env
+
+.git/
+.venv/
+**/__pycache__/
+.pytest_cache/
+.ruff_cache/
+.DS_Store
