@@ -1,0 +1,29 @@
+# Secrets — the MarketPay mTLS key must never be committed
+secrets/
+*firebase-adminsdk*.json
+*service-account*.json
+**/certs/
+*.key
+*.pem
+*.crt
+.env
+!.env.example
+
+# Python / tooling
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# OS / editors
+.obsidian
+.DS_Store
+.idea/
+.vscode/
+payment-integration-assignment
